@@ -1,0 +1,56 @@
+# policy.yaml
+
+pseudonym_prefix: "P"
+patient_birth_date_replacement: "19000101"
+
+# General tag actions
+delete:
+  # Direct identifiers (examples)
+  - PatientAddress
+  - PatientTelephoneNumbers
+  - OtherPatientIDs
+  - OtherPatientIDsSequence
+  - PatientMotherBirthName
+  - PatientComments
+  - ResponsiblePerson
+  - ResponsiblePersonRole
+  - ResponsibleOrganization
+  - RequestAttributesSequence   # optional: only if your governance allows deleting it
+
+blank:
+  # Direct / linkable identifiers
+  - AccessionNumber
+  - InstitutionName
+  - InstitutionAddress
+  - StationName
+  - InstitutionalDepartmentName
+  - ReferringPhysicianName
+  - OperatorsName
+
+  # Quasi-identifiers you want removed by default
+  - EthnicGroup
+
+dates:
+  mode: "blank"    # "blank" or "offset"
+  max_days: 365
+  include:
+    - StudyDate
+    - SeriesDate
+    - AcquisitionDate
+    - ContentDate
+    - StudyTime
+    - SeriesTime
+    - AcquisitionTime
+    - ContentTime
+    - AcquisitionDateTime   # (0008,002A) <-- included now
+
+uids:
+  enabled: true
+  root: "1.2.826.0.1.3680043.10.999"  # replace with your project/org UID root
+
+private_tags:
+  mode: "remove_all"     # or "allowlist"
+  allowlist_creators: [] # e.g. ["GEMS_Ultrasound"]
+
+overlays:
+  remove_60xx: true
