@@ -360,7 +360,7 @@ def apply_date_policy(ds: Dataset, pseudo_id: str, policy: Dict[str, Any], date_
                     elem.value = ""
                 continue
 
-            # TM: you can blank or keep; safest is blank unless you implement offset+wrap
+            # TM: can be blanked or kept; safest is blank unless you implement offset+wrap
             if vr == "TM":
                 elem.value = ""
                 continue
@@ -419,8 +419,7 @@ def pseudonymise_one_file(
     if is_already_processed(real_id, pseud_prefix):
         return None
 
-    # You can choose a different stable key; here we REQUIRE PatientID for identity mapping.
-    # If you truly need a fallback, define it explicitly per study governance.
+    # Possible to choose different stable key; here we REQUIRE PatientID for identity mapping.
     if not real_id:
         return None
 
@@ -602,6 +601,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
