@@ -1,7 +1,5 @@
 """
-pseudonymise_bulk_sqlite_v2.py
-
-Version 2: PS3.15-aligned(ish) reversible pseudonymisation + policy-driven metadata handling.
+pseudonymise_bulk_sqlite_v1.py
 
 Adds on top of v1:
 - YAML/JSON policy file (delete/blank/keep lists, private tags mode, overlays mode, date handling)
@@ -604,4 +602,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
