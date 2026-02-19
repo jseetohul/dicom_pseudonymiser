@@ -5,7 +5,7 @@ Adds on top of v1:
 - YAML/JSON policy file (delete/blank/keep lists, private tags mode, overlays mode, date handling)
 - Deterministic pseudonym IDs via HMAC salt (env var) OR deterministic hash fallback
 - Deterministic UID remapping (Study/Series/SOP + ANY nested UI elements via recursive traversal)
-- Date/time handling INCLUDING AcquisitionDateTime (0008,002A): blank OR patient-level offset
+- Date/time handling: blank OR patient-level offset
 - Private tags remove-all OR allowlist private creators
 - Overlay groups 60xx removal (policy-driven)
 - SQLite mapping + restore
@@ -602,5 +602,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
