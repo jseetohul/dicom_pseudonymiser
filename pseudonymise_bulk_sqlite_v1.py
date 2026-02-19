@@ -1,7 +1,7 @@
 """
 pseudonymise_bulk_sqlite_v1.py
 
-Adds on top of v1:
+Operates with the following:
 - YAML/JSON policy file (delete/blank/keep lists, private tags mode, overlays mode, date handling)
 - Deterministic pseudonym IDs via HMAC salt (env var) OR deterministic hash fallback
 - Deterministic UID remapping (Study/Series/SOP + ANY nested UI elements via recursive traversal)
@@ -602,6 +602,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
