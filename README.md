@@ -1,5 +1,5 @@
 # dicom_pseudonymiser
-# DICOM Pseudonymisation and Burned-In Pixel Redaction Pipeline
+# Ultrasound DICOM Pseudonymisation Pipeline : Version 1
 
 Author: Jenna Seetohul 
 Institution: UCLH / Research Use  
