@@ -305,7 +305,7 @@ def bulk_redact_burned_in(
 # Example usage
 # -----------------------------
 if __name__ == "__main__":
-    # Example for your GE Vivid S70 cine:
+    # Example for GE Vivid S70 cine:
     # pixel_array.shape was (frames, 708, 1016, 3)
     INPUT = Path(r"C:\Users\jseetohu\Documents\python\pydcanon\data_pseudonymised_v2") #Change as required 
     OUTPUT = Path(r"C:\Users\jseetohu\Documents\python\pydcanon\data_pixelredacted_v2")
@@ -319,4 +319,5 @@ if __name__ == "__main__":
     ]
 
     bulk_redact_burned_in(INPUT, OUTPUT, RECTS, fill="black", remove_overlays=True)
+
 
