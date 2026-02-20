@@ -22,14 +22,14 @@ Only the final pixel-redacted output should be released externally.
 
 ## Pipeline
 
-Raw DICOM  
-↓  
+    Raw DICOM  
+        ↓  
 pseudonymise_bulk_sqlite_v2.py  
-↓  
+        ↓  
 data_pseudonymised_v2  
-↓  
+        ↓  
 pixel_redact_burnedin.py  
-↓  
+        ↓  
 data_pixelredacted_v2  (FINAL DATASET)
 
 ---
