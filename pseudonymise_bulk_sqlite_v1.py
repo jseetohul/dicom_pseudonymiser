@@ -1,15 +1,6 @@
 """
 pseudonymise_bulk_sqlite_v1.py
 
-Operates with the following:
-- YAML/JSON policy file (delete/blank/keep lists, private tags mode, overlays mode, date handling)
-- Deterministic pseudonym IDs via HMAC salt (env var) OR deterministic hash fallback
-- Deterministic UID remapping (Study/Series/SOP + ANY nested UI elements via recursive traversal)
-- Date/time handling: blank OR patient-level offset
-- Private tags remove-all OR allowlist private creators
-- Overlay groups 60xx removal (policy-driven)
-- SQLite mapping + restore
-
 IMPORTANT:
 - This file handles metadata PHI/pseudonymisation. Burned-in pixel redaction is separate.
 - Keep the SQLite DB secure. It is your re-identification key.
@@ -24,27 +15,35 @@ Environment variables (recommended):
 
 from __future__ import annotations
 
-import argparse
-import base64
-import hashlib
-import hmac
-import json
-import os
-import sqlite3
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from pathlib import Path
+# ---- Standard library imports ----
+import argparse           # CLI interface: python script.py --policy policy.yaml
+import base64             # encode hashed bytes into safe printable tokens
+import hashlib            # SHA256 hash used for deterministic tokens / UID mapping
+import hmac               # keyed hashing for deterministic pseudonyms 
+import json               # allow JSON policy file
+import os                 # read environment variables (salts)
+import sqlite3            # local mapping DB for reversible pseudonymisation
+from dataclasses import dataclass  # tidy config holder
+from datetime import datetime, timedelta  # date parsing and date shifting
+from pathlib import Path   
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import pydicom
 from pydicom.dataset import Dataset
 from pydicom.sequence import Sequence
 
+import logging
+
+logging.basicConfig(
+    filename="pipeline.log",
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
 
 # -----------------------------
 # DEFAULT PATHS (edit or pass via CLI)
 # -----------------------------
-PROJECT_ROOT = Path(r"C:\Users\jseetohu\Documents\python\pydcanon")
+PROJECT_ROOT = Path(r"C:\Users\jseetohu\Documents\python\pydcanon") #replace with the desired file path 
 DEFAULT_INPUT_ROOT = PROJECT_ROOT / "data"
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "data_pseudonymised_v2"
 DEFAULT_DB_PATH = PROJECT_ROOT / "pseudonym_map.db"
@@ -52,6 +51,12 @@ DEFAULT_DB_PATH = PROJECT_ROOT / "pseudonym_map.db"
 
 # -----------------------------
 # POLICY LOADING
+# The policy defines - tags to delete
+#                    - tags to blank
+#                    - date handling strategy (blank or per-patient offset)
+#                    - UID handling
+#                    - private tag handling (remove_all vs allowlist)
+#                    - overlay handling (remove 60xx groups)
 # -----------------------------
 def load_policy(policy_path: Path) -> Dict[str, Any]:
     """
@@ -76,10 +81,14 @@ def load_policy(policy_path: Path) -> Dict[str, Any]:
 # -----------------------------
 # SQLITE MAPPING STORE
 # -----------------------------
-def init_db(db_path: Path) -> None:
+def init_db(db_path: Path) -> None: # Creates db and core patients table if missing
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    # Stores the reversible mapping
     with sqlite3.connect(str(db_path)) as conn:
         cur = conn.cursor()
+
+        #'real-patient_id' is the primary key
+        #'pseudo_id' is the unique key for de-identified outputs
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS patients (
@@ -94,7 +103,8 @@ def init_db(db_path: Path) -> None:
         conn.commit()
 
 
-def get_pseudo_by_real(db_path: Path, real_patient_id: str) -> Optional[str]:
+def get_pseudo_by_real(db_path: Path, real_patient_id: str) -> Optional[str]: 
+    #fetches a pseudonym if mapping exists
     with sqlite3.connect(str(db_path)) as conn:
         cur = conn.cursor()
         cur.execute("SELECT pseudo_id FROM patients WHERE real_patient_id=?", (real_patient_id,))
@@ -103,6 +113,7 @@ def get_pseudo_by_real(db_path: Path, real_patient_id: str) -> Optional[str]:
 
 
 def get_real_by_pseudo(db_path: Path, pseudo_id: str) -> Optional[Tuple[str, str, str]]:
+    #used for restoring the pseudonym's original ID
     with sqlite3.connect(str(db_path)) as conn:
         cur = conn.cursor()
         cur.execute(
@@ -117,6 +128,7 @@ def get_real_by_pseudo(db_path: Path, pseudo_id: str) -> Optional[Tuple[str, str
 
 
 def insert_mapping(db_path: Path, real_patient_id: str, pseudo_id: str, name: str, dob: str) -> None:
+    #Insert a new mapping into identity vault in sqlite
     with sqlite3.connect(str(db_path)) as conn:
         cur = conn.cursor()
         cur.execute(
@@ -131,6 +143,15 @@ def insert_mapping(db_path: Path, real_patient_id: str, pseudo_id: str, name: st
 
 # -----------------------------
 # PSEUDONYM GENERATION (DETERMINISTIC)
+    """
+    Generates a stable token from an input string using HMAC-SHA256 (8 characters).
+    - HMAC makes tokens which are harder to decrypt, hence with a secret salt
+    - Base64 urlsafe encoding produces filesystem-safe characters
+    - Truncation keeps pseudonym short (e.g. Pxxxxxxxxxx)
+
+    Security note:
+    - salt must be kept secret (environment variable recommended)
+    """
 # -----------------------------
 def hmac_token(value: str, salt: str, length: int = 10) -> str:
     digest = hmac.new(
@@ -144,6 +165,7 @@ def hmac_token(value: str, salt: str, length: int = 10) -> str:
 
 def make_pseudonym(real_patient_id: str, prefix: str, salt: str) -> str:
     # Deterministic, stable across environments if salt is shared
+    # Converts a real patient ID into a pseudonym like Pxxxxxxx
     return f"{prefix}{hmac_token(real_patient_id, salt, length=10)}"
 
 
@@ -161,7 +183,7 @@ def get_or_create_pseudonym(
 
     pseudo_id = make_pseudonym(real_patient_id, prefix=prefix, salt=pseud_salt)
     insert_mapping(db_path, real_patient_id, pseudo_id, patient_name, birth_date)
-    return pseudo_id
+    return pseudo_id # If mapping exists, reuse it. f not create a new pseudonym and store.
 
 
 # -----------------------------
@@ -169,7 +191,7 @@ def get_or_create_pseudonym(
 # -----------------------------
 class UIDMapper:
     """
-    Maps original UIDs -> new UIDs deterministically so relationships remain consistent.
+    Maps original UIDs to new UIDs deterministically so relationships remain consistent.
     Uses uid_root + numeric suffix derived from salted hash.
     """
     def __init__(self, uid_root: str, uid_salt: str):
@@ -218,8 +240,8 @@ def replace_uids_everywhere(ds: Dataset, uid_mapper: UIDMapper) -> None:
 def handle_private_tags(ds: Dataset, mode: str = "remove_all", allowlist_creators: Optional[List[str]] = None) -> None:
     """
     mode:
-      - remove_all: remove every private tag
-      - allowlist: keep only private blocks whose creator is allowlisted; remove the rest
+      - remove_all: remove every private tag which are hidden identifiers from vendior
+      - allowlist: keep only private blocks whose creator is allowlisted for certain vendor-specific features; remove the rest
     """
     mode = (mode or "remove_all").lower()
 
@@ -241,7 +263,7 @@ def handle_private_tags(ds: Dataset, mode: str = "remove_all", allowlist_creator
 def remove_overlays_60xx(ds: Dataset) -> None:
     """
     Remove all overlay/graphics elements in groups 60xx.
-    This does NOT alter PixelData, but removes overlay planes/labels.
+    This does NOT change PixelData, but removes overlay planes.
     """
     for group in range(0x6000, 0x6020, 2):
         tags = [elem.tag for elem in ds.iterall() if elem.tag.group == group]
@@ -253,13 +275,13 @@ def remove_overlays_60xx(ds: Dataset) -> None:
 # -----------------------------
 # TAG OPERATIONS (DELETE/BLANK)
 # -----------------------------
-def delete_keywords(ds: Dataset, keywords: Iterable[str]) -> None:
+def delete_keywords(ds: Dataset, keywords: Iterable[str]) -> None: #deletes type 3 tags (optional)
     for kw in keywords:
         if kw in ds:
             del ds[kw]
 
 
-def blank_keywords(ds: Dataset, keywords: Iterable[str], value: str = "") -> None:
+def blank_keywords(ds: Dataset, keywords: Iterable[str], value: str = "") -> None: #deletes blank tags (often type 2) by assigning empty string
     for kw in keywords:
         if kw in ds:
             ds.data_element(kw).value = value
@@ -280,13 +302,13 @@ def _parse_da(v: str) -> Optional[datetime]:
 
 
 def _parse_dt(v: str) -> Optional[datetime]:
-    # DT can be: YYYYMMDDHHMMSS.FFFFFF&ZZXX etc. We'll parse basic prefix.
+    # DT can be: YYYYMMDDHHMMSS.FFFFFF&ZZXX. Prefix is parsed for decreasing time detail
     v = (v or "").strip()
     if not v:
         return None
     # take only digits up to seconds
     digits = "".join(ch for ch in v if ch.isdigit())
-    for fmt in ("%Y%m%d%H%M%S", "%Y%m%d%H%M", "%Y%m%d%H", "%Y%m%d"):
+    for fmt in ("%Y%m%d%H%M%S", "%Y%m%d%H%M", "%Y%m%d%H", "%Y%m%d"): # use only digits in this format
         try:
             return datetime.strptime(digits[: len(fmt.replace("%", ""))], fmt)
         except Exception:
@@ -306,7 +328,7 @@ def _format_dt(dt: datetime) -> str:
 def patient_level_offset_days(pseudo_id: str, salt: str, max_days: int = 365) -> int:
     """
     Deterministically derive a small offset (1..max_days) from pseudo_id.
-    Use salt so offsets are not guessable.
+    Using salt so offsets are not identifiable.
     """
     token = hmac_token(pseudo_id, salt=salt, length=16)
     n = int(hashlib.sha256(token.encode("utf-8")).hexdigest(), 16)
@@ -360,7 +382,7 @@ def apply_date_policy(ds: Dataset, pseudo_id: str, policy: Dict[str, Any], date_
                     elem.value = ""
                 continue
 
-            # TM: can be blanked or kept; safest is blank unless you implement offset+wrap
+            # TM: you can blank or keep; safest is blank unless you implement offset+wrap
             if vr == "TM":
                 elem.value = ""
                 continue
@@ -373,7 +395,7 @@ def apply_date_policy(ds: Dataset, pseudo_id: str, policy: Dict[str, Any], date_
 
 
 # -----------------------------
-# MAIN PSEUDONYMISATION (METADATA)
+# MAIN PSEUDONYMISATION CODE
 # -----------------------------
 @dataclass
 class RunConfig:
@@ -383,14 +405,14 @@ class RunConfig:
     policy_path: Path
 
 
-def read_dicom_safe(path: Path) -> Optional[Dataset]:
+def read_dicom_safe(path: Path) -> Optional[Dataset]: #reads dicom
     try:
         return pydicom.dcmread(str(path))
     except Exception:
         return None
 
 
-def is_already_processed(patient_id: str, pseud_prefix: str) -> bool:
+def is_already_processed(patient_id: str, pseud_prefix: str) -> bool: #if already processed, provide pseudonym
     pid = (patient_id or "").strip()
     if pid in {"", "ID", "ANONYMOUS"}:
         return True
@@ -419,7 +441,7 @@ def pseudonymise_one_file(
     if is_already_processed(real_id, pseud_prefix):
         return None
 
-    # Possible to choose different stable key; here we REQUIRE PatientID for identity mapping.
+    # You can choose a different stable key; here we REQUIRE PatientID for identity mapping.
     if not real_id:
         return None
 
@@ -544,13 +566,14 @@ def bulk_pseudonymise(cfg: RunConfig) -> None:
 
 
 # -----------------------------
-# RESTORE (CONTROLLED RE-IDENTIFICATION)
+# RESTORE (CONTROLLED RE-IDENTIFICATION PROCESS FROM DB)
+"""This is used to restore identifiers from the Sqlite database"""
 # -----------------------------
 def restore_one_file(pseudo_file: Path, restored_out: Path, db_path: Path, pseud_prefix: str = "P") -> None:
     ds = pydicom.dcmread(str(pseudo_file))
     pseudo_id = str(ds.get("PatientID", "")).strip()
 
-    if not pseudo_id or not pseudo_id.startswith(pseud_prefix):
+    if not pseudo_id or not pseudo_id.startswith(pseud_prefix): #check if pseudo complete
         raise ValueError(f"File does not look pseudonymised (PatientID={pseudo_id}): {pseudo_file}")
 
     row = get_real_by_pseudo(db_path, pseudo_id)
@@ -601,7 +624,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 
 
